@@ -1,4 +1,4 @@
-Quiero crear una aplicación web de estadísticas de baloncesto, son de la federación catalana de baloncesto, 
+Quiero hagas una aplicación web de estadísticas de baloncesto, son competiciones de la federación catalana de baloncesto, 
 hay categorías mini y normales, la diferencia entre ellas son la manera de puntuar y de ordenar la clasificación, 
 tendrás que mirar las reglas de la federación para ordernar correctamente la clasificación. Los datos los proporcionaré descargando
 dos ficheros json de cada paritdo, uno con los datos de los partidos, jugadores, etc. y otro fichero con el detalle de los tiros de
@@ -26,3 +26,84 @@ Fondo : https://postimg.cc/sGfStzb6
 Brafa : https://postimg.cc/1gHkNfT3
 
 Thau : https://postimg.cc/1nsNqPRm
+
+
+
+
+Prompt:
+
+Tengo una base de datos, en supabase, con los datos de competiciones de baloncesto, son competiciones de la federación catalana de 
+baloncesto. Crea una aplicación web completa llamada "Brafa Stats" para analizar estadísticas de las competiciones, de los paritdos
+y de los jugadores. Te adjunto una foto con el esquema de la base de datos, tablas, campos y relaciones.
+
+Diseño:
+
+- Interfaz moderna, atractiva y profesional.
+- Colores que se parezca la web oficial de la federación (https://www.basquetcatala.cat/)
+- Totalmente responsive
+- Navegación completa entre todas las páginas
+
+
+Funcionalidades:
+
+Landing Page:
+- Buscador de competiciones, en la que se ha de seleccionar Temporada, categoría y competición. Una competición pertenece a una categoría y a una temporada.
+
+competición:
+
+- Clasificación de los equipos: Según la Federación Catalana de Baloncesto (https://www.basquetcatala.cat/), hay dos tipos de ligas: mini y normal.
+  El orden de la clasificación dependerá del tipo de liga (investiga como funciona cada liga para calcular bien la clasificación).
+
+- Debajo de la clasificación, cuando seleccionan un equipo quiero ver, por pestañas información agrupada por:
+    * Grid Partidos: estadísticas de cada paritdo jugado, con su información de: 
+        - Marcador
+        - Total de tiros de 1, con su porcentaje de acierto (Gráfica circular con el % de acierto, color de rojo a verde, contra mayor porcentaje más verde)
+        - Total de tiros de 2 
+        - Total de tiros de 3
+        - Total de Faltas cometidas
+         
+    * Grid Jugador: estadísticas agrupada por jugador de todos los partidos: 
+        - Partidos jugados (PJ),         
+        - Media de puntos por partido (PPG)
+        - Media de minutos jugados por partido (MPG)
+        - Media de fatlas por partido (FPG)
+        - Media de faltas de tiros, es decir, de las faltas que comete el jugador, cuantas son con tiros para el rival.
+
+      Al seleccionar un jugador, se ha de poder ver el desglose de cada partido.
+
+    * Tarjetas de jugador:
+        Foto del jugador, con nombre y dorsal, con la misma información que se muestra en la grid mas:
+        - Puntos totales (PTS), 
+        - Media de puntos por Minuto (PPM)
+
+        , y si clicas en la ficha del jugador, mostrar más información del jugador como:
+
+        - Gráfica de evolución de puntos por partidos.
+        - Gráfica de evolución de Tiros libres por partido
+        - Tarjetas con información de cada partido.
+ 
+
+El objetivo de la web es que ayude a los entrenadores a analizar tanto su equipo como el de los rivales.
+
+
+Base de datos (supabase):
+
+- URL: https://zvojniiaftqwdaggfvma.supabase.co
+- anon public: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp2b2puaWlhZnRxd2RhZ2dmdm1hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTE0MDYsImV4cCI6MjA4MzYyNzQwNn0.9Xht9Z_Bmfp05U6G-_JrETIqsE87RFd-JXQMpaHrmzM
+
+Tablas: (el detalle de cada tabla y las relaciones lo puedes obtener de la imagen que te adjunto del esquema de la base de datos)
+
+- categorias
+- clubs
+- competiciones
+- detalle_tiros_jugador
+- equipos
+- estadísticas_jugador_partido
+- jugadores
+- paritdo_marcador_evolucion
+- partido_movimientos
+- partidos
+- plantillas
+- temporadas
+
+
