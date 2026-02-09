@@ -157,6 +157,7 @@ async function importarPartido(mainJson, movesJson, tempNom, catNom, compNom, jo
                     dorsal: p.dorsal ? String(p.dorsal) : null,
                     puntos: d.score || 0, 
                     valoracion: d.valoration || 0,
+                    tiempo_jugado: p.timePlayed || 0,
                     asistencias: d.assists || 0,
                     tapones: d.block || 0,
                     faltas_cometidas: d.faults || 0,
