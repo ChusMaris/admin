@@ -135,6 +135,8 @@ async function importarPartido(mainJson, movesJson, tempNom, catNom, compNom, jo
 
         // --- JUGADORES Y ESTADÍSTICAS ---
         const mapaJugadoresActor = {}; 
+        const movimientosIniciales = []; // Array para guardar los movimientos de los titulares
+
         for (const t of mainJson.teams) {
             const eqId = mapaEquipos[String(t.teamIdIntern)];
             for (const p of t.players) {
@@ -149,6 +151,22 @@ async function importarPartido(mainJson, movesJson, tempNom, catNom, compNom, jo
                 await supabaseClient.from('plantillas').upsert({
                     jugador_id: jugadorId, equipo_id: eqId, dorsal: p.dorsal ? String(p.dorsal) : null
                 }, { onConflict: 'jugador_id,equipo_id' });
+
+                // Si el jugador es titular, creamos el movimiento de entrada
+                if (p.starting === true) {
+                    movimientosIniciales.push({
+                        partido_id: partidoId,
+                        periodo: 1,
+                        minuto: 6, // Como indicaste
+                        segundo: 0,
+                        tipo_movimiento: '112',
+                        descripcion: 'Entra al camp',
+                        jugador_id: jugadorId,
+                        equipo_id: eqId,
+                        marcador: '0-0',
+                        event_uuid: `start_${partidoId}_${jugadorId}` // UUID único para evitar duplicados
+                    });
+                }
 
                 const d = p.data || {};
                 const { data: statsData, error: statsErr } = await supabaseClient.from('estadisticas_jugador_partido').upsert({
@@ -186,14 +204,24 @@ async function importarPartido(mainJson, movesJson, tempNom, catNom, compNom, jo
         }
 
         const movesArray = Array.isArray(movesJson) ? movesJson : [];
+        let dataMoves = [];
+        
         if (movesArray.length > 0) {
-            const dataMoves = movesArray.map(m => ({
+            dataMoves = movesArray.map(m => ({
                 partido_id: partidoId, periodo: m.period || 0, minuto: m.min || 0, segundo: m.sec || 0,
                 tipo_movimiento: String(m.idMove || ''), descripcion: m.move || '', 
                 jugador_id: mapaJugadoresActor[String(m.actorId)] || null,
                 equipo_id: mapaEquipos[String(m.idTeam)] || null, marcador: m.score || '', 
                 event_uuid: m.event_uuid || m.eventUuid
             }));
+        }
+
+        // Añadimos los movimientos de los titulares al principio del array de movimientos
+        if (movimientosIniciales.length > 0) {
+            dataMoves = [...movimientosIniciales, ...dataMoves];
+        }
+
+        if (dataMoves.length > 0) {
             await supabaseClient.from('partido_movimientos').upsert(dataMoves, { onConflict: 'event_uuid' });
         }
         return true;
