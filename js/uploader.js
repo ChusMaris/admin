@@ -80,7 +80,7 @@ async function importarPartido(mainJson, movesJson, tempNom, catNom, compNom, jo
         if (cErr || !cData?.length) throw new Error(`Categoría: ${cErr?.message}`);
         const categoriaId = cData[0].id;
 
-        // Competición (CLAVE CORREGIDA: nombre, temporada y categoria)
+        // Competición
         const { data: compData, error: compErr } = await supabaseClient.from('competiciones').upsert({ 
             nombre: compNom, 
             temporada_id: temporadaId, 
@@ -114,7 +114,6 @@ async function importarPartido(mainJson, movesJson, tempNom, catNom, compNom, jo
         }
 
         // --- PARTIDO ---
-        // Forzamos ISOString para evitar problemas de alineamiento y formato en Postgres
         const fechaValida = new Date(mainJson.time);
         const fechaISO = isNaN(fechaValida.getTime()) ? new Date().toISOString() : fechaValida.toISOString();
 
@@ -135,7 +134,8 @@ async function importarPartido(mainJson, movesJson, tempNom, catNom, compNom, jo
 
         // --- JUGADORES Y ESTADÍSTICAS ---
         const mapaJugadoresActor = {}; 
-        const movimientosIniciales = []; // Array para guardar los movimientos de los titulares
+        const movimientosIniciales = [];
+        const enPista = new Set(); // Rastreador de jugadores en pista
 
         for (const t of mainJson.teams) {
             const eqId = mapaEquipos[String(t.teamIdIntern)];
@@ -152,19 +152,20 @@ async function importarPartido(mainJson, movesJson, tempNom, catNom, compNom, jo
                     jugador_id: jugadorId, equipo_id: eqId, dorsal: p.dorsal ? String(p.dorsal) : null
                 }, { onConflict: 'jugador_id,equipo_id' });
 
-                // Si el jugador es titular, creamos el movimiento de entrada
+                // Registrar titulares y crear su movimiento de entrada
                 if (p.starting === true) {
+                    enPista.add(String(p.actorId));
                     movimientosIniciales.push({
                         partido_id: partidoId,
                         periodo: 1,
-                        minuto: 6, // Como indicaste
+                        minuto: 6,
                         segundo: 0,
                         tipo_movimiento: '112',
                         descripcion: 'Entra al camp',
                         jugador_id: jugadorId,
                         equipo_id: eqId,
                         marcador: '0-0',
-                        event_uuid: `start_${partidoId}_${jugadorId}` // UUID único para evitar duplicados
+                        event_uuid: `start_${partidoId}_${jugadorId}`
                     });
                 }
 
@@ -207,19 +208,59 @@ async function importarPartido(mainJson, movesJson, tempNom, catNom, compNom, jo
         let dataMoves = [];
         
         if (movesArray.length > 0) {
-            dataMoves = movesArray.map(m => ({
-                partido_id: partidoId, periodo: m.period || 0, minuto: m.min || 0, segundo: m.sec || 0,
-                tipo_movimiento: String(m.idMove || ''), descripcion: m.move || '', 
-                jugador_id: mapaJugadoresActor[String(m.actorId)] || null,
-                equipo_id: mapaEquipos[String(m.idTeam)] || null, marcador: m.score || '', 
-                event_uuid: m.event_uuid || m.eventUuid
-            }));
+            dataMoves = movesArray.map(m => {
+                const actorId = String(m.actorId);
+                const tipoMov = String(m.idMove || '');
+                
+                // Actualizar estado de jugadores en pista según los movimientos
+                if (tipoMov === '112') {
+                    enPista.add(actorId);
+                } else if (tipoMov === '115') {
+                    enPista.delete(actorId);
+                }
+
+                return {
+                    partido_id: partidoId, periodo: m.period || 0, minuto: m.min || 0, segundo: m.sec || 0,
+                    tipo_movimiento: tipoMov, descripcion: m.move || '', 
+                    jugador_id: mapaJugadoresActor[actorId] || null,
+                    equipo_id: mapaEquipos[String(m.idTeam)] || null, marcador: m.score || '', 
+                    event_uuid: m.event_uuid || m.eventUuid
+                };
+            });
         }
 
-        // Añadimos los movimientos de los titulares al principio del array de movimientos
-        if (movimientosIniciales.length > 0) {
-            dataMoves = [...movimientosIniciales, ...dataMoves];
+        // Generar movimientos de salida para los 10 jugadores que quedaron en pista
+        const movimientosFinales = [];
+        for (const actorId of enPista) {
+            const jugadorId = mapaJugadoresActor[actorId];
+            let eqId = null;
+            
+            // Buscar a qué equipo pertenece este jugador
+            for (const t of mainJson.teams) {
+                if (t.players.some(p => String(p.actorId) === actorId)) {
+                    eqId = mapaEquipos[String(t.teamIdIntern)];
+                    break;
+                }
+            }
+
+            if (jugadorId && eqId) {
+                movimientosFinales.push({
+                    partido_id: partidoId,
+                    periodo: 8,
+                    minuto: 0,
+                    segundo: 0,
+                    tipo_movimiento: '115',
+                    descripcion: 'Surt del camp',
+                    jugador_id: jugadorId,
+                    equipo_id: eqId,
+                    marcador: '', 
+                    event_uuid: `end_${partidoId}_${jugadorId}`
+                });
+            }
         }
+
+        // Unir todos los movimientos: iniciales + transcurso + finales
+        dataMoves = [...movimientosIniciales, ...dataMoves, ...movimientosFinales];
 
         if (dataMoves.length > 0) {
             await supabaseClient.from('partido_movimientos').upsert(dataMoves, { onConflict: 'event_uuid' });
