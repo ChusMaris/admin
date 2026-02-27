@@ -92,7 +92,9 @@ async function importarPartido(mainJson, movesJson, tempNom, catNom, compNom, jo
 
         // --- EQUIPOS ---
         let idsEquipos = [];
-        const mapaEquipos = {}; 
+        const mapaEquiposPorNombre = {}; 
+        const mapaTeamIdANombre = {};
+
         for (const t of mainJson.teams) {
             const { data: clu, error: cluErr } = await supabaseClient.from('clubs')
                 .upsert({ nombre: t.name, nombre_corto: t.shortName }, { onConflict: 'nombre' }).select();
@@ -104,13 +106,17 @@ async function importarPartido(mainJson, movesJson, tempNom, catNom, compNom, jo
                 club_id: clubId, 
                 competicion_id: competicionId, 
                 nombre_especifico: t.name, 
-                team_id_intern_fce: String(t.teamIdIntern)
+                team_id_intern_fce: String(t.teamIdIntern ?? t.idTeam ?? t.teamId ?? '')
             }, { onConflict: 'club_id,competicion_id' }).select();
 
             if (eqErr || !eq?.length) throw new Error(`Equipo ${t.name}: ${eqErr?.message}`);
             
-            idsEquipos.push(eq[0].id);
-            mapaEquipos[String(t.teamIdIntern)] = eq[0].id;
+            const eqId = eq[0].id;
+            const teamIdKey = String(t.teamIdIntern ?? t.idTeam ?? t.teamId ?? '');
+            
+            idsEquipos.push(eqId);
+            mapaEquiposPorNombre[t.name] = eqId;
+            if (teamIdKey) mapaTeamIdANombre[teamIdKey] = t.name;
         }
 
         // --- PARTIDO ---
@@ -132,21 +138,47 @@ async function importarPartido(mainJson, movesJson, tempNom, catNom, compNom, jo
         if (partErr || !partData?.length) throw new Error(`Partido: ${partErr?.message}`);
         const partidoId = partData[0].id;
 
+        // --- LIMPIEZA DE DATOS PREVIOS (Evitar duplicados) ---
+        logMsg(`Limpiando datos previos del partido ${partidoId}...`);
+        
+        // 1. Evolución del marcador
+        await supabaseClient.from('partido_marcador_evolucion').delete().eq('partido_id', partidoId);
+        
+        // 2. Movimientos
+        await supabaseClient.from('partido_movimientos').delete().eq('partido_id', partidoId);
+        
+        // 3. Tiros (necesitamos las IDs de estadísticas para borrar sus detalles)
+        const { data: oldStats } = await supabaseClient.from('estadisticas_jugador_partido').select('id').eq('partido_id', partidoId);
+        if (oldStats?.length) {
+            const oldStatsIds = oldStats.map(s => s.id);
+            await supabaseClient.from('detalle_tiros_jugador').delete().in('estadistica_id', oldStatsIds);
+        }
+        
+        // 4. Estadísticas
+        await supabaseClient.from('estadisticas_jugador_partido').delete().eq('partido_id', partidoId);
+
         // --- JUGADORES Y ESTADÍSTICAS ---
-        const mapaJugadoresActor = {}; 
+        const mapaJugadoresPorNombre = {}; 
+        const mapaActorANombre = {};
         const movimientosIniciales = [];
-        const enPista = new Set(); // Rastreador de jugadores en pista
+        const nombresEnPista = new Set(); 
 
         for (const t of mainJson.teams) {
-            const eqId = mapaEquipos[String(t.teamIdIntern)];
+            const eqId = mapaEquiposPorNombre[t.name];
+            
             for (const p of t.players) {
+                const actorIdKey = String(p.actorId ?? p.idActor ?? p.actor_id ?? '');
+                
                 const { data: jug, error: jugErr } = await supabaseClient.from('jugadores').upsert({
-                    nombre_completo: p.name, actor_id: String(p.actorId)
+                    nombre_completo: p.name, 
+                    actor_id: actorIdKey
                 }, { onConflict: 'nombre_completo' }).select();
                 
                 if (jugErr || !jug?.length) throw new Error(`Jugador ${p.name}: ${jugErr?.message}`);
                 const jugadorId = jug[0].id;
-                mapaJugadoresActor[String(p.actorId)] = jugadorId;
+                
+                mapaJugadoresPorNombre[p.name] = jugadorId;
+                if (actorIdKey) mapaActorANombre[actorIdKey] = p.name;
 
                 await supabaseClient.from('plantillas').upsert({
                     jugador_id: jugadorId, equipo_id: eqId, dorsal: p.dorsal ? String(p.dorsal) : null
@@ -154,7 +186,7 @@ async function importarPartido(mainJson, movesJson, tempNom, catNom, compNom, jo
 
                 // Registrar titulares y crear su movimiento de entrada
                 if (p.starting === true) {
-                    enPista.add(String(p.actorId));
+                    nombresEnPista.add(p.name);
                     movimientosIniciales.push({
                         partido_id: partidoId,
                         periodo: 1,
@@ -204,41 +236,75 @@ async function importarPartido(mainJson, movesJson, tempNom, catNom, compNom, jo
             await supabaseClient.from('partido_marcador_evolucion').insert(evolData);
         }
 
-        const movesArray = Array.isArray(movesJson) ? movesJson : [];
+        const rawMoves = Array.isArray(movesJson) ? movesJson : (movesJson?.moves || []);
         let dataMoves = [];
         
-        if (movesArray.length > 0) {
-            dataMoves = movesArray.map(m => {
-                const actorId = String(m.actorId);
-                const tipoMov = String(m.idMove || '');
+        if (rawMoves.length > 0) {
+            dataMoves = rawMoves.map(m => {
+                const actorIdKey = m.actorId ? String(m.actorId) : null;
+                const teamIdKey = m.idTeam ? String(m.idTeam) : null;
+                
+                const nombreJugador = actorIdKey ? mapaActorANombre[actorIdKey] : null;
+                const nombreEquipo = teamIdKey ? mapaTeamIdANombre[teamIdKey] : null;
+                
+                const jugadorId = nombreJugador ? mapaJugadoresPorNombre[nombreJugador] : null;
+                const equipoId = nombreEquipo ? mapaEquiposPorNombre[nombreEquipo] : null;
+
+                const tipoMov = String(m.idMove ?? m.id_move ?? 'EVENTO');
                 
                 // Actualizar estado de jugadores en pista según los movimientos
-                if (tipoMov === '112') {
-                    enPista.add(actorId);
-                } else if (tipoMov === '115') {
-                    enPista.delete(actorId);
+                if (nombreJugador) {
+                    if (tipoMov === '112') {
+                        nombresEnPista.add(nombreJugador);
+                    } else if (tipoMov === '115') {
+                        nombresEnPista.delete(nombreJugador);
+                    }
                 }
 
                 return {
-                    partido_id: partidoId, periodo: m.period || 0, minuto: m.min || 0, segundo: m.sec || 0,
-                    tipo_movimiento: tipoMov, descripcion: m.move || '', 
-                    jugador_id: mapaJugadoresActor[actorId] || null,
-                    equipo_id: mapaEquipos[String(m.idTeam)] || null, marcador: m.score || '', 
-                    event_uuid: m.event_uuid || m.eventUuid
+                    partido_id: partidoId,
+                    periodo: m.period ?? m.periodo ?? 0,
+                    minuto: m.min ?? m.minuto ?? 0,
+                    segundo: m.second ?? m.sec ?? m.segundo ?? 0,
+                    tipo_movimiento: tipoMov,
+                    descripcion: m.move ?? m.descripcion ?? '',
+                    jugador_id: jugadorId,
+                    equipo_id: equipoId,
+                    marcador: m.score ?? m.marcador ?? '',
+                    event_uuid: m.event_uuid ?? m.eventUuid ?? `move_${partidoId}_${Math.random().toString(36).substr(2, 9)}`
                 };
             });
         }
 
-        // Generar movimientos de salida para los 10 jugadores que quedaron en pista
+        // Generar movimientos de salida para los jugadores que quedaron en pista
+        // Obtener el marcador final para los movimientos de salida
+        let marcadorFinal = `${mainJson.teams[0]?.players[0]?.teamScore || 0}-${mainJson.teams[0]?.players[0]?.oppScore || 0}`;
+        
+        // Intentar obtener el marcador del evento 116 (Fin de periodo/partido) del último periodo disponible
+        const endOfMatchMove = [...dataMoves]
+            .filter(m => m.tipo_movimiento === '116')
+            .sort((a, b) => {
+                if (b.periodo !== a.periodo) return b.periodo - a.periodo;
+                if (b.minuto !== a.minuto) return b.minuto - a.minuto;
+                return b.segundo - a.segundo;
+            })[0];
+
+        if (endOfMatchMove && endOfMatchMove.marcador) {
+            marcadorFinal = endOfMatchMove.marcador;
+        } else if (mainJson.score && mainJson.score.length > 0) {
+            const lastScore = mainJson.score[mainJson.score.length - 1];
+            marcadorFinal = `${lastScore.local}-${lastScore.visit}`;
+        }
+
         const movimientosFinales = [];
-        for (const actorId of enPista) {
-            const jugadorId = mapaJugadoresActor[actorId];
+        for (const nombre of nombresEnPista) {
+            const jugadorId = mapaJugadoresPorNombre[nombre];
             let eqId = null;
             
-            // Buscar a qué equipo pertenece este jugador
+            // Buscar a qué equipo pertenece este jugador por su nombre
             for (const t of mainJson.teams) {
-                if (t.players.some(p => String(p.actorId) === actorId)) {
-                    eqId = mapaEquipos[String(t.teamIdIntern)];
+                if (t.players.some(p => p.name === nombre)) {
+                    eqId = mapaEquiposPorNombre[t.name];
                     break;
                 }
             }
@@ -253,7 +319,7 @@ async function importarPartido(mainJson, movesJson, tempNom, catNom, compNom, jo
                     descripcion: 'Surt del camp',
                     jugador_id: jugadorId,
                     equipo_id: eqId,
-                    marcador: '', 
+                    marcador: marcadorFinal, 
                     event_uuid: `end_${partidoId}_${jugadorId}`
                 });
             }
